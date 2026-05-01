@@ -185,12 +185,26 @@ async def answer_question(user_id: int, question: str) -> str:
 
 Ответ:"""
 
-    # 5. Вызываем Gemini синхронно через to_thread (avoid await issue)
-    try:
-        def _call_gemini():
-            resp = _gemini_model.generate_content(full_prompt)
-            return resp.text
+    # 5. Вызываем Gemini синхронно через to_thread + retry при 429
+    def _call_gemini():
+        import time
+        last_err = None
+        for attempt in range(3):
+            try:
+                resp = _gemini_model.generate_content(full_prompt)
+                return resp.text
+            except Exception as e:
+                last_err = e
+                err_str = str(e)
+                if "429" in err_str or "quota" in err_str.lower() or "rate" in err_str.lower():
+                    wait = 5 * (attempt + 1)  # 5s, 10s, 15s
+                    logger.warning(f"Gemini 429 rate limit, retry {attempt+1}/3 через {wait}s")
+                    time.sleep(wait)
+                else:
+                    raise  # не 429 — сразу бросаем
+        raise last_err
 
+    try:
         answer = await asyncio.to_thread(_call_gemini)
         add_to_history(user_id, question, answer)
         return answer
